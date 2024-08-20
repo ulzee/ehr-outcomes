@@ -8,7 +8,6 @@ import pickle as pk
 import argparse
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_curve, precision_recall_curve, roc_auc_score, average_precision_score, f1_score
-import matplotlib.pyplot as plt
 from time import time
 from hyperopt import hp, Trials, fmin, tpe, STATUS_OK
 from xgboost import XGBClassifier
