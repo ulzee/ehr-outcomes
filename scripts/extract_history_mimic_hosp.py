@@ -84,7 +84,6 @@ for sid, (hids, intime, outtime) in visits_by_patient.items():
 
 stats.s_too_few
 # %%
-# target = 'F329'
 bench_range = 180
 match_control_min_ratio = 10
 
@@ -94,10 +93,10 @@ def match_any(targ, codes):
     return any([targ == c[:len(targ)] for c in codes if type(c) == str])
 
 # example parse of a phenotype
-# for target in ['F329', 'I25']:
-for target in ['G20']:
+for target in ['F329', 'I25', 'G2']:
     unique_s = hadf.loc[[h for h in dxlookup if match_any(target, dxlookup[h])]]['subject_id'].nunique()
     print(target, unique_s)
+    # break
 
     samples = []
 
@@ -195,11 +194,3 @@ for target in ['G20']:
     boot_ixs = [np.random.choice(ntest, size=ntest, replace=True).tolist() for _ in range(10)]
     with open(f'{project_root}/files/boot_ixs_{target}.pk', 'wb') as fl:
         pk.dump(boot_ixs, fl)
-#%%
-# import matplotlib.pyplot as plt
-# plt.figure()
-# plt.hist(case_dts)
-# plt.show()
-# len(case_dts)
-# #%%
-

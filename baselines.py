@@ -13,6 +13,7 @@ from hyperopt import hp, Trials, fmin, tpe, STATUS_OK
 from xgboost import XGBClassifier
 #%%
 parser = argparse.ArgumentParser()
+parser.add_argument('--dataset', type=str, required=True)
 parser.add_argument('--model', type=str, default='linear')
 parser.add_argument('--icd_resolution', type=int, default=4)
 parser.add_argument('--task', type=str, required=True)
@@ -21,37 +22,37 @@ parser.add_argument('--no_agesex', action='store_true', default=False)
 args = parser.parse_args()
 
 #%%
-covdf = pd.read_csv(f'{project_root}/saved/cov.csv')
+covdf = pd.read_csv(f'{project_root}/saved/{args.dataset}/cov.csv')
 covdf
 #%%
-pdf = pd.read_csv(f'{project_root}/saved/hosp-diagnoses_icd10.csv')
-pdf
+with open(f'{project_root}/saved/{args.dataset}/dx.pk', 'rb') as fl:
+    dx = pk.load(fl)
 #%%
 def format_icd(c):
     return c[:args.icd_resolution]
+
 unique_codes = dict()
-for code in pdf['icd10'][~pdf['icd10'].isna()].unique():
-    c = format_icd(code)
-    if c in unique_codes: continue
-    unique_codes[c] = len(unique_codes)
-len(unique_codes)
+
+for codes in dx.values():
+    for code in codes:
+        if type(code) != str: continue
+        c = format_icd(code)
+        if c in unique_codes: continue
+        unique_codes[c] = len(unique_codes)
 #%%
 
 if args.task in ['mortality', 'los72']:
-    tdf = pd.read_csv(f'{project_root}/saved/targets_by_icustay.csv')
+    tdf = pd.read_csv(f'{project_root}/saved/{args.dataset}/targets_by_icustay.csv')
 else:
-    tdf = pd.read_csv(f'{project_root}/saved/targets_diagnosis_{args.task}.csv')
+    tdf = pd.read_csv(f'{project_root}/saved/{args.dataset}/targets_diagnosis_{args.task}.csv')
 tdf
 #%%
 agesex_by_visit = dict()
 for hid, age, sex in zip(covdf['hadm_id'], covdf['age'], covdf['gender']):
     agesex_by_visit[hid] = (age, [0, 1][sex == 'F'])
 # %%
-with open(f'{project_root}/saved/dx.pk', 'rb') as fl:
-    dx = pk.load(fl)
-# %%
 phases = ['train', 'val', 'test']
-allids = { ph: np.genfromtxt(f'{project_root}/files/{ph}_ids.txt', dtype=int) for ph in phases }
+allids = { ph: np.genfromtxt(f'{project_root}/files/{args.dataset}/{ph}_ids.txt', dtype=int) for ph in phases }
 # %%
 datamats = dict()
 for ph, ids in allids.items():
@@ -82,37 +83,43 @@ for ph, ids in allids.items():
     y = np.array(outcomes)
 
     datamats[ph] = [X, y]
+
+
+print('# Total:', sum([len(y) for _, y in datamats.values()]))
+print('# Cases:', sum([sum(y) for _, y in datamats.values()]))
 #%%
 # ntest = len(datamats['test'][1])
 # boot_ixs = [np.random.choice(ntest, size=ntest).tolist() for _ in range(10)]
 if args.task in ['mortality', 'los72']:
-    with open(f'{project_root}/files/boot_ixs.pk', 'rb') as fl:
+    with open(f'{project_root}/files/{args.dataset}/boot_ixs.pk', 'rb') as fl:
         boot_ixs = pk.load(fl)
 else:
-    with open(f'{project_root}/files/boot_ixs_{args.task}.pk', 'rb') as fl:
+    with open(f'{project_root}/files/{args.dataset}/boot_ixs_{args.task}.pk', 'rb') as fl:
         boot_ixs = pk.load(fl)
 #%%
 mdl_list = [args.model]
 if ',' in args.model:
     mdl_list = args.model.split(',')
 #%%
-def get_boot_metrics(ypred):
+def get_boot_metrics(save_name, ypred):
     ls = []
-    for bxs in boot_ixs:
+    for bxs in [range(len(ypred))] + boot_ixs[:10]:
         ytrue = datamats['test'][1]
         ls += [[
             average_precision_score(ytrue[bxs], ypred[bxs]),
             roc_auc_score(ytrue[bxs], ypred[bxs]),
-            f1_score(ytrue[bxs], ypred[bxs] > 0.5, average='macro'),
+            f1_score(ytrue[bxs], ypred[bxs] > 0.5, average='micro'),
         ]]
 
     out = ''
     for tag, replicates in zip(['ap', 'roc', 'f1'], zip(*ls)):
-        est = np.mean(replicates)
+        est, replicates = replicates[0], replicates[1:]
         ci = 1.95*np.std(replicates)
-        out += f'{tag}:{est:.3f} ({ci:.3f}) '
+        out += f'{tag}:{est*100:.2f} ({ci*100:.2f}) '
 
     print(out)
+    with open(f'saved/{args.dataset}_{args.task}_{save_name}.txt', 'w') as fl:
+        fl.write(out)
 #%%
 if 'linear' in mdl_list:
     t0 = time()
@@ -121,7 +128,7 @@ if 'linear' in mdl_list:
 
     ypred = model.predict_proba(datamats['test'][0])[:, 1]
 
-    get_boot_metrics(ypred)
+    get_boot_metrics('linear', ypred)
 if 'xgb' in mdl_list:
     t0 = time()
     print('Tuning hyperparams...')
@@ -147,7 +154,7 @@ if 'xgb' in mdl_list:
         roc = roc_auc_score(ytarg, ypred)
         final_loss = clf.evals_result()['validation_0']['logloss'][-1]
 
-        print(f'{final_loss:.4f} {ap:.4f} {roc:.4}', space)
+        print(f'{final_loss:.4f} {ap*100:.2f} {roc*100:.2f}', space)
 
         return { 'loss': final_loss, 'status': STATUS_OK }
 
@@ -178,5 +185,5 @@ if 'xgb' in mdl_list:
 
     ypred = model.predict_proba(datamats['test'][0])[:, 1]
 
-    get_boot_metrics(ypred)
+    get_boot_metrics('xgb', ypred)
 # %%
